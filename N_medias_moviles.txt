@@ -1,0 +1,182 @@
+import importlib
+import subprocess
+import sys
+
+# Lista de librerías requeridas (nombre para importar: nombre para pip)
+librerias = {
+    'yfinance': 'yfinance',
+    'pandas': 'pandas',
+    'pandas_ta': 'pandas-ta',  # Nota: el nombre en pip es diferente
+    'plotly.graph_objects': 'plotly',
+    'numpy': 'numpy'
+}
+
+print("Verificando e instalando dependencias...\n")
+
+for lib_import, lib_pip in librerias.items():
+    try:
+        importlib.import_module(lib_import)
+        print(f"[OK] {lib_import} ya está instalado")
+    except ImportError:
+        print(f"[FALTANTE] Instalando {lib_import}...")
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", lib_pip])
+            print(f"[INSTALADO] {lib_import} se instaló correctamente")
+        except:
+            print(f"[ERROR] No se pudo instalar {lib_import}. Ejecuta manualmente: pip install {lib_pip}")
+
+print("\nProceso completado.")
+
+
+#Librerías a utilizar
+import yfinance as yf
+import pandas as pd
+import pandas_ta as ta
+import plotly.graph_objects as go
+import numpy as np
+#Portafolio
+Tickers=['CEMEXCPO.MX','CUERVO.MX','LACOMERUBC.MX','GRUMAB.MX','VOLARA.MX']
+#Definir la comisión de Compra/Venta en la casa de bolsa 0.25%
+Comision=0.0025 
+#Definición de funciones a utilizar 
+
+#Función de extracción de información de Yahoo Finance de 1 mes cada 60 minutos
+def get_data(symbol: str):
+    data=yf.download(tickers=symbol,period='44d',interval='60m')
+    data.reset_index(inplace=True)
+    return data
+
+#Función para calcular el promedio móvil
+def calculate_sma(data,length: int):
+    return ta.sma(data['Close'],length)
+
+# Función para determinar la tendencia - equilibrada
+def determine_trend(data):
+    if data['SMA_10']>data['SMA_20']>data['SMA_30']:
+        return 2 # Tendencia de Alza
+    elif data['SMA_10']<data['SMA_20']<data['SMA_30']:
+        return 1 # Tendencia de Baja
+    else:
+        return 0 # Sin tendencia definida
+
+#Función para Calcular el RSI (Relative Strength Index)
+#Se utiliza en los mercados como un indicador de Sobrecompra o Sobreventa
+#Valores por arriba de 70% indican que está en un territorio de sobrecompra
+#Valores por debajo de 30% indican que está en un territorio de sobrevemta
+def rsi(DF,n=20):
+    df=DF.copy()
+    df['dif']=df['Close']-df['Close'].shift(1)
+    df['gain']=np.where(df['dif']>=0,df['dif'],0)
+    df['loss']=np.where(df['dif']<0,abs(df['dif']),0)
+    average_gain=[]
+    average_loss=[]
+    gain=df['gain'].tolist()
+    loss=df['loss'].tolist()
+    for i in range(len(df)):
+        if i < n:
+            average_gain.append(np.NaN)
+            average_loss.append(np.NaN)
+        elif i==n:
+            average_gain.append(df['gain'].rolling(n).mean()[n])
+            average_loss.append(df['loss'].rolling(n).mean()[n])
+        elif i > n:
+            average_gain.append(((n-1)*average_gain[i-1]+gain[i])/n)
+            average_loss.append(((n-1)*average_loss[i-1]+loss[i])/n)
+    df['average_gain']=np.array(average_gain)
+    df['average_loss']=np.array(average_loss)
+    df['RS']=df['average_gain']/df['average_loss']
+    df['RSI']=100-(100/(1+df['RS']))
+    return df['RSI']
+#Función central
+def señales(Ticker):
+    data=get_data(Ticker)
+    data=data.set_axis(['Datetime','Close','High','Low','Open','Volume'],axis=1)
+    
+    #Promedios móviles de los últimos 10.20 y 30 valores de la columna 'Close' y se agregan al Dataframe
+    data['SMA_10']=calculate_sma(data,10)
+    data['SMA_20']=calculate_sma(data,20)
+    data['SMA_30']=calculate_sma(data,30)
+    #Determinar la tendencia
+    data['Tendencia']=data.apply(determine_trend,axis=1)
+    RSI_data=rsi(data,n=20)
+    data=pd.concat([data,RSI_data], axis=1)
+    # Determinar en que periodos hubo tendencia de alza y de baja - se guarda en un nuevo dataframe y lo reindexamos
+    df=data[data['Tendencia']!=0]
+    df=df.reset_index()
+    # Determinar la señal de Compra o Venta y definir el precio de dicha señal
+    df.loc[0,'Señal']=df.loc[0,'Tendencia']
+    for i in range(1,len(df)):
+        if df.loc[i,'Tendencia']==df.loc[i-1,'Tendencia']:
+            df.loc[i,'Señal']=0
+        else:
+            df.loc[i,'Señal']=df.loc[i,'Tendencia']
+    #Corregir la primera fila, en caso de que la primera señal, sea una señal de venta
+    #Compra en 2 y vende en 1
+    if df.loc[0,'Señal']==1:
+        df.loc[0,'Señal']=0
+    else:
+        df.loc[0,'Señal']=2
+    #Quitar todos los ceros del dataframe con la columna 'Señal'
+    df=df[df['Señal']!=0]
+  #Reindexar finalmente el dataframe
+    df_Final=df.reset_index()
+    #Calcular el rendimiento de la estrategia
+    for j in range(0,len(df_Final)):
+        if df_Final.loc[j,'Señal']==1:
+            df_Final.loc[j,'Rendimiento']=df_Final.loc[j,'Close']*(1-Comision*1.16)/(df_Final.loc[j-1,'Close']*(1+Comision*1.16))-1
+        else:
+            df_Final.loc[j,'Rendimiento']=0
+    # Asegurar que 'Señal' sea de tipo object (para poder poner strings sin warnings)
+    df_Final['Señal'] = df_Final['Señal'].astype(object)
+    #Renombrar la columna 'Señal'
+    for j in range(0,len(df_Final)):
+        if df_Final.loc[j,'Tendencia']==2:
+           df_Final.loc[j,'Señal']= "Compra"
+        else:
+            df_Final.loc[j,'Señal']="Venta"
+    columnas=['index','Datetime','Close','Señal','RSI','Rendimiento']
+    df_Resumen=df_Final[columnas]
+    return df_Resumen, data
+df_señales=pd.DataFrame()
+for Ticker in Tickers:
+    df_Resumen, _ =señales(Ticker)
+    df_Resumen['Ticker']=Ticker
+    df_señales = pd.concat([df_señales, df_Resumen])
+df_señales = df_señales.sort_values(by = "Datetime")
+df_señales.reset_index(drop=True,inplace=True)
+df_señales
+resumen = df_señales[df_señales['Señal']=='Venta'].groupby('Ticker').agg(
+    Nro_trades_cerrados=('Señal', 'count'),  
+    Rendimiento_min=('Rendimiento', 'min'),
+    Rendimiento_max=('Rendimiento', 'max'),
+    Rendimiento_promedio=('Rendimiento', 'mean')
+).reset_index()
+
+resumen
+df_Stats=df_señales[df_señales['Rendimiento']!=0]
+df_Stats['Rendimiento'].describe().round(4)
+for Ticker in Tickers:
+    df_Resumen, data=señales(Ticker)
+    # Crear columna con precios de compra
+    df_Resumen['Señal_Compra'] = np.where(df_Resumen['Señal'] == "Compra", df_Resumen['Close'], "")
+    
+    # Crear columna con precios de venta
+    df_Resumen['Señal_Venta'] = np.where(df_Resumen['Señal'] == "Venta", df_Resumen['Close'], "")
+    #Gráfico de Velas Japonesas y Marcadores de Compra y Venta
+    grafico=data[:]
+    fig=go.Figure(data=[go.Candlestick(x=grafico.index,
+                                       open=grafico['Open'],
+                                       high=grafico['High'],
+                                       low=grafico['Low'],
+                                       close=grafico['Close'])])
+    #Añadir los promedios móviles
+    fig.add_trace(go.Scatter(x=grafico.index,y=grafico['SMA_10'],mode='lines',name='SMA 10',line=dict(color='blue')))
+    fig.add_trace(go.Scatter(x=grafico.index,y=grafico['SMA_20'],mode='lines',name='SMA 20',line=dict(color='red')))
+    fig.add_trace(go.Scatter(x=grafico.index,y=grafico['SMA_30'],mode='lines',name='SMA 30',line=dict(color='green')))
+    
+    #Añadir señales de compra y venta
+    fig.add_scatter(x=df_Resumen['index'],y=df_Resumen['Señal_Compra'],mode='markers',marker=dict(size=8,color='Black'),name='Compra')
+    fig.add_scatter(x=df_Resumen['index'],y=df_Resumen['Señal_Venta'],mode='markers',marker=dict(size=8,color='Yellow'),name='Venta')
+    fig.update_layout(title=f"{Ticker}")
+    
+    fig.show()
