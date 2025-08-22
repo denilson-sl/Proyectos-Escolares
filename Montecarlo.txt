@@ -1,0 +1,48 @@
+
+Sub VaR_Simulaciones()
+    
+    Dim Unif, Z As Double
+    Dim PrecioUlt, PrecioSim As Double
+    Dim Perd_Gan, Portafolio As Double
+    Dim Media, Volatilidad, Titulos As Double
+    Dim i, j, k, n As Long
+    
+    'Almacenar el numero de simulaciones
+    
+    n = Sheets("VaR Simulación").Cells(11, 2)
+    
+    'Limpiar el espacio donde va a imprimir los valores de precios, perdidas y ganancias, asi como el portafolio
+    Sheets("VaR Simulación").Range("A18:v10017") = " "
+    
+    For i = 1 To 10
+           PrecioUlt = Sheets("VaR Simulación").Cells(5, 1 + i)
+           Titulos = Sheets("VaR Simulación").Cells(6, 1 + i)
+           Media = Sheets("VaR Simulación").Cells(7, 1 + i)
+           Volatilidad = Sheets("VaR Simulación").Cells(8, 1 + i)
+           
+           For j = 1 To n
+                   Unif = Rnd() 'Genera de forma aleatoria un numero entre 0 y 1 que representa una probabilidad
+                   Z = Application.WorksheetFunction.Norm_S_Inv(Unif) 'Funcion en visual basic que me genera el numero N(0,1)
+                   PrecioSim = PrecioUlt + PrecioUlt * (Media + Volatilidad * Z * Sqr(1 / 252)) 'Simulaciones Aleatoria de precios, mediante impactos de una Normal
+                   Perd_Gan = (PrecioSim - PrecioUlt) * Titulos
+                   
+                   'Imprimir el contador de escenarios
+                   Sheets("VaR Simulación").Cells(17 + j, 1) = j
+                   
+                   'Imprimir los precios generados en la simulacion
+                    Sheets("VaR Simulación").Cells(17 + j, i + 1) = PrecioSim
+                    
+                    'Imprimir las perdidas y ganancias de cada simulacion
+                    Sheets("VaR Simulación").Cells(17 + j, i + 11) = Perd_Gan
+                   
+                   If i = 10 Then
+                        Portafolio = 0
+                        For k = 1 To 10
+                              Portafolio = Portafolio + Sheets("VaR Simulación").Cells(17 + j, k + 11)
+                        Next
+                        Sheets("VaR Simulación").Cells(17 + j, 22) = Portafolio
+                   End If
+            Next
+    Next
+    MsgBox ("Listo")
+End Sub
